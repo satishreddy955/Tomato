@@ -1,4 +1,5 @@
 import React, { useContext, useState } from "react";
+import bgImage from "../../assets/bg_image.png";
 import "./LoginPopup.css";
 import { assets } from "../../assets/assets";
 import { StoreContext } from "../../Context/StoreContext";
