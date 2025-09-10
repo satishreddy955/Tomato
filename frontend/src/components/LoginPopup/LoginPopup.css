@@ -1,13 +1,14 @@
-.login-popup{
-    position:absolute;
+.login-popup {
+    position: absolute;
     z-index: 1;
     width: 100%;
     height: 100%;
-    background-color: #0000;
+    background-color: transparent;
     display: grid;
-    background-image: url("C:\Users\HP 840 G3 TOUCH\Documents\Food Delll\frontend\src\assets\bg_image.png");
+    background-image: url("../assets/bg_image.png");
     background-size: cover;
 }
+
 .login-popup-container{
     place-self: center;
     width:max(23vw,330px);
