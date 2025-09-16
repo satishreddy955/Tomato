@@ -24,54 +24,142 @@ const loginUser = async (req, res) => {
     if (!isMatch) return res.json({ success: false, message: "Invalid credentials" });
 
     const token = createToken(user._id);
-    res.json({ success: true, token });
+    res.json({ success: true, token, user });
   } catch (error) {
     console.error(error);
     res.json({ success: false, message: "Error" });
   }
 };
 
-// Register
-const registerUser = async (req, res) => {
-  const { name, email, password } = req.body;
-  try {
-    const exists = await userModel.findOne({ email });
-    if (exists) return res.json({ success: false, message: "User already exists" });
+// ------------------ REGISTER WITH OTP ------------------
 
-    if (!validator.isEmail(email)) return res.json({ success: false, message: "Invalid email" });
-    if (password.length < 8) return res.json({ success: false, message: "Password must be 8+ chars" });
-
-    const hashedPassword = await bcrypt.hash(password, 10);
-    const newUser = new userModel({ name, email, password: hashedPassword });
-    const user = await newUser.save();
-
-    const token = createToken(user._id);
-    res.json({ success: true, token });
-  } catch (error) {
-    console.error(error);
-    res.json({ success: false, message: "Error" });
-  }
-};
-
-// ------------------ PASSWORD RESET ------------------
-
-// Step 1: Send OTP
-const sendResetOTP = async (req, res) => {
+// Step 1: Send OTP for registration
+// Step 1: Send OTP for registration (with cooldown)
+const sendRegisterOTP = async (req, res) => {
   const { email } = req.body;
   try {
-    const user = await userModel.findOne({ email });
-    if (!user) return res.json({ success: false, message: "User not found" });
+    if (!validator.isEmail(email)) {
+      return res.json({ success: false, message: "Invalid email" });
+    }
 
-    const otp = Math.floor(100000 + Math.random() * 900000); // 6-digit OTP
+    // Check if user already exists
+    const exists = await userModel.findOne({ email });
+    if (exists) {
+      return res.json({ success: false, message: "User already exists" });
+    }
 
-    // Save OTP in DB (expires in 5 minutes)
+    // Check cooldown
+    const lastOtp = await otpModel.findOne({ email }).sort({ createdAt: -1 });
+    if (lastOtp && (Date.now() - lastOtp.createdAt.getTime()) < 30 * 1000) {
+      return res.json({ success: false, message: "Please wait 30 seconds before requesting again" });
+    }
+
+    // Remove old OTPs
+    await otpModel.deleteMany({ email });
+
+    // Generate OTP
+    const otp = Math.floor(100000 + Math.random() * 900000);
+
     await otpModel.create({
       email,
       otp,
       expiresAt: new Date(Date.now() + 5 * 60 * 1000),
     });
 
-    // Nodemailer configuration
+    const transporter = nodemailer.createTransport({
+      service: "gmail",
+      auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS,
+      },
+    });
+
+    await transporter.sendMail({
+      from: `"Food App" <${process.env.EMAIL_USER}>`,
+      to: email,
+      subject: "Email Verification OTP",
+      text: `Your OTP for registration is ${otp}. It will expire in 5 minutes.`,
+    });
+
+    res.json({ success: true, message: "OTP sent to email" });
+  } catch (error) {
+    console.error(error);
+    res.json({ success: false, message: "Error sending OTP" });
+  }
+};
+
+// Step 2: Verify OTP and Register
+const registerUser = async (req, res) => {
+  const { name, email, password, otp } = req.body;
+  try {
+    // Validate email
+    if (!validator.isEmail(email)) {
+      return res.json({ success: false, message: "Invalid email" });
+    }
+
+    // Check if user already exists
+    const exists = await userModel.findOne({ email });
+    if (exists) {
+      return res.json({ success: false, message: "User already exists" });
+    }
+
+    // Find OTP record
+    const record = await otpModel.findOne({ email, otp });
+    if (!record) {
+      return res.json({ success: false, message: "Invalid OTP" });
+    }
+
+    // Check expiry
+    if (record.expiresAt < new Date()) {
+      await otpModel.deleteMany({ email });
+      return res.json({ success: false, message: "OTP expired" });
+    }
+
+    // Validate password
+    if (password.length < 8) {
+      return res.json({ success: false, message: "Password must be 8+ chars" });
+    }
+
+    // Hash password
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    // Create new user
+    const newUser = new userModel({ name, email, password: hashedPassword });
+    const user = await newUser.save();
+
+    // Delete OTP after successful registration
+    await otpModel.deleteMany({ email });
+
+    // Generate token
+    const token = createToken(user._id);
+
+    res.json({ success: true, token, user });
+  } catch (error) {
+    console.error(error);
+    res.json({ success: false, message: "Error registering user" });
+  }
+};
+
+// ------------------ PASSWORD RESET ------------------
+
+// Step 1: Send OTP for reset
+const sendResetOTP = async (req, res) => {
+  const { email } = req.body;
+  try {
+    const user = await userModel.findOne({ email });
+    if (!user) return res.json({ success: false, message: "User not found" });
+
+    // Remove old OTPs for this email
+    await otpModel.deleteMany({ email });
+
+    const otp = Math.floor(100000 + Math.random() * 900000);
+
+    await otpModel.create({
+      email,
+      otp,
+      expiresAt: new Date(Date.now() + 5 * 60 * 1000),
+    });
+
     const transporter = nodemailer.createTransport({
       service: "gmail",
       auth: {
@@ -94,12 +182,20 @@ const sendResetOTP = async (req, res) => {
   }
 };
 
-// Step 2: Verify OTP & Reset Password
+// Step 2: Reset Password
 const resetPassword = async (req, res) => {
   const { email, otp, newPassword } = req.body;
   try {
     const record = await otpModel.findOne({ email, otp });
-    if (!record) return res.json({ success: false, message: "Invalid or expired OTP" });
+    if (!record) {
+      return res.json({ success: false, message: "Invalid OTP" });
+    }
+
+    // Check expiry
+    if (record.expiresAt < new Date()) {
+      await otpModel.deleteMany({ email });
+      return res.json({ success: false, message: "OTP expired" });
+    }
 
     const user = await userModel.findOne({ email });
     if (!user) return res.json({ success: false, message: "User not found" });
@@ -118,4 +214,4 @@ const resetPassword = async (req, res) => {
   }
 };
 
-export { loginUser, registerUser, sendResetOTP, resetPassword };
+export { loginUser, sendRegisterOTP, registerUser, sendResetOTP, resetPassword };
