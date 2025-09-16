@@ -1,14 +1,23 @@
-import express from 'express';
-import { loginUser, registerUser, sendResetOTP, resetPassword } from '../controllers/userController.js';
+import express from "express";
+import {
+  loginUser,
+  registerUser,
+  sendRegisterOTP,
+  sendResetOTP,
+  resetPassword,
+} from "../controllers/userController.js";
 
 const userRouter = express.Router();
 
-// Auth endpoints
-userRouter.post("/register", registerUser);
+// ---------------- AUTH ----------------
 userRouter.post("/login", loginUser);
 
-// Forgot password / OTP
-userRouter.post("/send-otp", sendResetOTP);
+// Sign Up with OTP
+userRouter.post("/send-register-otp", sendRegisterOTP); // Step 1: send OTP for signup
+userRouter.post("/register", registerUser);             // Step 2: verify OTP + create account
+
+// ---------------- PASSWORD RESET ----------------
+userRouter.post("/send-otp", sendResetOTP);      // for password reset
 userRouter.post("/reset-password", resetPassword);
 
 export default userRouter;
